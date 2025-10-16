@@ -6,6 +6,7 @@ from bot.config import TOKEN
 from bot.utils.logger import logger
 
 from bot.handlers import admin, consent, funnel, media, start, stop, subscribe, message
+from bot.handlers.funnel import initialize_funnel_messages
 from bot.db import init_db
 
 load_dotenv()
@@ -15,6 +16,7 @@ if not TOKEN:
 
 def main():
     init_db()
+    initialize_funnel_messages()
 
     app = ApplicationBuilder().token(TOKEN).build()
 

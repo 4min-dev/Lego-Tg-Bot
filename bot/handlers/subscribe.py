@@ -12,18 +12,15 @@ async def subscribe(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # Обновляем статус пользователя в БД
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("UPDATE users SET consent_status = 'yes' WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
-    # Отправляем приветственное сообщение
     await update.message.reply_text(CONSENT_YES_TEXT)
 
-    # Запускаем автоворонку
-    start_funnel(context, user_id, chat_id)
+    start_funnel(context, user_id, chat_id, test_mode=True)
 
 def register(app):
     from telegram.ext import CommandHandler
