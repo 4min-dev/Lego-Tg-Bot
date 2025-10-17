@@ -1,4 +1,6 @@
 import sqlite3
+import aiosqlite
+import asyncio
 import pandas as pd
 from io import BytesIO
 from telegram import Update, InputFile
@@ -29,23 +31,65 @@ async def export(update: Update, context: CallbackContext):
 
     logger.info(f"Администратор {update.effective_user.id} запросил экспорт данных.")
 
-async def broadcast(update: Update, context: CallbackContext):
-    """Рассылка сообщения всем, кто дал согласие"""
+async def funnel_preview(update: Update, context: CallbackContext):
+    """Отправляет все сообщения автоворонки по очереди администратору без задержки"""
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("Доступ запрещён.")
-    text = ' '.join(context.args)
-    if not text:
+
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute(
+            "SELECT order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC"
+        ) as cursor:
+            messages = await cursor.fetchall()
+
+    if not messages:
+        return await update.message.reply_text("Сообщения автоворонки отсутствуют.")
+
+    await update.message.reply_text("📬 Начинаю предпросмотр сообщений автоворонки...")
+    logger.info(f"Администратор {update.effective_user.id} запросил предпросмотр автоворонки")
+
+    for order_num, delay_days, text in messages:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"<b>Сообщение #{order_num}</b> (задержка: {delay_days} сек.)\n{text}",
+                parse_mode='HTML'
+            )
+            logger.info(f"Отправлено сообщение #{order_num} администратору {update.effective_user.id}")
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Ошибка при отправке сообщения #{order_num} администратору {update.effective_user.id}: {e}")
+            await update.message.reply_text(f"Ошибка при отправке сообщения #{order_num}: {e}")
+            break
+
+    await update.message.reply_text("✅ Предпросмотр автоворонки завершён.")
+
+async def broadcast(update: Update, context: CallbackContext):
+    """Рассылка сообщения всем, кто дал согласие, с поддержкой HTML-форматирования"""
+    if update.effective_user.id not in ADMIN_IDS:
+        return await update.message.reply_text("Доступ запрещён.")
+
+    if len(context.args) < 1:
         return await update.message.reply_text("Использование: /broadcast <текст>")
+
+    text = update.message.text_html[len("/broadcast "):]
+    
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT user_id FROM users WHERE consent_status='yes'")
     users = c.fetchall()
     conn.close()
+
+    logger.info(f"Рассылка сообщения для {len(users)} пользователей: {text}")
+    
     for (uid,) in users:
         try:
-            await context.bot.send_message(chat_id=uid, text=text)
+            await context.bot.send_message(chat_id=uid, text=text, parse_mode='HTML')
+            logger.info(f"Сообщение отправлено пользователю {uid}")
         except Exception as e:
-            logger.error(f"Ошибка при отправке {uid}: {e}")
+            logger.error(f"Ошибка при отправке пользователю {uid}: {e}")
+
+    await update.message.reply_text(f"📢 Рассылка выполнена для {len(users)} пользователей.")
 
 async def funnel_list(update: Update, context: CallbackContext):
     """Показать все сообщения автоворонки"""
@@ -71,14 +115,14 @@ async def funnel_add(update: Update, context: CallbackContext):
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("Доступ запрещён.")
 
-    if len(context.args) < 2:
+    if len(context.args) < 1:
         return await update.message.reply_text(
             "Использование: /funnel_add <секунды задержки> <текст сообщения>"
         )
 
     try:
         delay_seconds = int(context.args[0])
-        text = ' '.join(context.args[1:])
+        text = update.message.text_html[len(f"/funnel_add {context.args[0]} "):]
     except ValueError:
         return await update.message.reply_text("Ошибка: задержка должна быть числом.")
 
@@ -112,13 +156,13 @@ async def funnel_edit(update: Update, context: CallbackContext):
     """Редактировать существующее сообщение"""
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("Доступ запрещён.")
-    if len(context.args) < 2:
+    if len(context.args) < 1:
         return await update.message.reply_text("Использование: /funnel_edit <номер> <новый текст>")
     try:
         order_num = int(context.args[0])
+        new_text = update.message.text_html[len(f"/funnel_edit {context.args[0]} "):]
     except ValueError:
         return await update.message.reply_text("Ошибка: номер должен быть числом.")
-    new_text = ' '.join(context.args[1:])
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -126,7 +170,6 @@ async def funnel_edit(update: Update, context: CallbackContext):
     conn.commit()
     conn.close()
     await update.message.reply_text(f"✏️ Сообщение #{order_num} обновлено.")
-
 
 async def funnel_delete(update: Update, context: CallbackContext):
     """Удалить сообщение из воронки"""
@@ -149,6 +192,7 @@ async def funnel_delete(update: Update, context: CallbackContext):
 def register(application):
     application.add_handler(CommandHandler("export", export))
     application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CommandHandler("funnel_preview", funnel_preview))
     application.add_handler(CommandHandler("funnel_list", funnel_list))
     application.add_handler(CommandHandler("funnel_add", funnel_add))
     application.add_handler(CommandHandler("funnel_edit", funnel_edit))

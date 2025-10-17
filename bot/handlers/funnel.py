@@ -152,7 +152,7 @@ async def send_funnel_message(context: CallbackContext):
     send_allowed = await asyncio.get_event_loop().run_in_executor(None, db_work)
     if send_allowed is True:
         try:
-            await context.bot.send_message(chat_id=chat_id, text=text)
+            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
             logger.info(f"Отправлено funnel сообщение пользователю {user_id}")
         except Exception as e:
             logger.error(f"Ошибка при отправке funnel сообщения пользователю {user_id}: {e}")
