@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import CallbackContext
 from .funnel import start_funnel
 from bot.config import DB_FILE
-from bot.texts import CONSENT_YES_TEXT
+import bot.texts as texts
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ async def subscribe(update: Update, context: CallbackContext) -> None:
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(CONSENT_YES_TEXT)
+    await update.message.reply_text(texts.CONSENT_YES_TEXT)
 
     start_funnel(context, user_id, chat_id, test_mode=True)
 

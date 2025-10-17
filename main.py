@@ -1,11 +1,10 @@
-import os
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
 
 from bot.config import TOKEN
 from bot.utils.logger import logger
 
-from bot.handlers import admin, consent, funnel, media, start, stop, subscribe, message
+from bot.handlers import admin, consent, funnel, media, start, stop, subscribe, message, edit_texts
 from bot.handlers.funnel import initialize_funnel_messages
 from bot.db import init_db
 
@@ -21,6 +20,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     start.register(app)
+    edit_texts.register(app)
     stop.register(app)
     admin.register(app)
     consent.register(app)

@@ -4,7 +4,8 @@ import datetime
 import asyncio
 from telegram.ext import CallbackContext
 from bot.config import DB_FILE
-from bot.texts import FUNNEL_MESSAGES, REMINDER_TEXT
+from bot.texts import FUNNEL_MESSAGES
+import bot.texts as texts
 from bot.utils.logger import logger
 
 def initialize_funnel_messages():
@@ -32,7 +33,6 @@ def initialize_funnel_messages():
         c.execute("ALTER TABLE user_funnel_history ADD COLUMN scheduled_at TEXT")
         logger.info("Добавлен столбец scheduled_at в таблицу user_funnel_history")
 
-    # Создаём таблицу funnel_messages, если не существует
     c.execute('''
         CREATE TABLE IF NOT EXISTS funnel_messages (
             order_num INTEGER PRIMARY KEY,
@@ -68,7 +68,7 @@ async def send_reminder(context: CallbackContext, chat_id: int, user_id: int):
             [InlineKeyboardButton("✅ Да, хочу быть в курсе!", callback_data='consent_yes')],
             [InlineKeyboardButton("❌ Пока нет", callback_data='consent_no')]
         ])
-        await context.bot.send_message(chat_id=chat_id, text=REMINDER_TEXT, reply_markup=keyboard)
+        await context.bot.send_message(chat_id=chat_id, text=texts.REMINDER_TEXT, reply_markup=keyboard)
     conn.close()
 
 def start_funnel(context: CallbackContext, user_id: int, chat_id: int, test_mode=True):

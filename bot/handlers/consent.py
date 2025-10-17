@@ -1,13 +1,14 @@
 import sqlite3
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import CallbackQueryHandler, CallbackContext
-from bot.texts import REMINDER_TEXT, CONSENT_YES_TEXT
+import bot.texts as texts
 from bot.handlers.funnel import start_funnel
 from bot.config import DB_FILE
 from bot.utils.logger import logger
 
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
+    logger.info(f"consent.py: Получен callback_query: data={query.data}")
     await query.answer()
     user_id = query.from_user.id
     chat_id = query.message.chat_id
@@ -19,7 +20,7 @@ async def button_handler(update: Update, context: CallbackContext):
     if data == 'consent_yes':
         c.execute("UPDATE users SET consent_status='yes' WHERE user_id=?", (user_id,))
         conn.commit()
-        await query.edit_message_text(CONSENT_YES_TEXT)
+        await query.edit_message_text(texts.CONSENT_YES_TEXT)
         start_funnel(context, user_id, chat_id)
 
     elif data == 'consent_no':
@@ -30,4 +31,4 @@ async def button_handler(update: Update, context: CallbackContext):
     conn.close()
 
 def register(application):
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CallbackQueryHandler(button_handler, pattern='^consent_'))
