@@ -7,14 +7,26 @@ from bot.utils.logger import logger
 from bot.handlers.funnel import schedule_funnel_for_user
 
 async def export(update: Update, context: CallbackContext):
-    """Выгрузка данных пользователей в Excel"""
+    """Выгрузка данных пользователей в Excel и отправка в Telegram"""
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("Доступ запрещён.")
+
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM users", conn)
     conn.close()
-    df.to_excel(EXCEL_FILE, index=False)
-    await update.message.reply_text(f"Данные сохранены в {EXCEL_FILE}")
+
+    # сохраняем Excel в память
+    excel_buffer = BytesIO()
+    df.to_excel(excel_buffer, index=False)
+    excel_buffer.seek(0)
+
+    # отправляем в Telegram
+    await update.message.reply_document(
+        document=InputFile(excel_buffer, filename="users_export.xlsx"),
+        caption="📊 Вот актуальные данные пользователей"
+    )
+
+    logger.info(f"Администратор {update.effective_user.id} запросил экспорт данных.")
 
 async def broadcast(update: Update, context: CallbackContext):
     """Рассылка сообщения всем, кто дал согласие"""
