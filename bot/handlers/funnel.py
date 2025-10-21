@@ -210,7 +210,6 @@ async def schedule_new_funnel_messages(context: CallbackContext, user_id: int, c
 
 
 def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: int, test_mode=True):
-    """Ставим только новые сообщения автоворонки в очередь для одного пользователя"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
@@ -227,12 +226,18 @@ def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: in
             continue
         
         delay = delay_sec if test_mode else delay_sec * 24 * 60 * 60
+
+        # Обёртка
+        async def send_async(context: CallbackContext):
+            await send_funnel_message(context)
+
         context.job_queue.run_once(
-            send_funnel_message,
+            send_async,
             when=delay,
             data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': order_num}
         )
-        logger.info(f"Запланировано сообщение #{order_num} для user_id {user_id} через {delay} {'секунд' if test_mode else 'дней'}")
+        
+        logger.info(f"Запланировано сообщение #{order_num} для user_id {user_id} через {delay} секунд")
         
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -242,7 +247,6 @@ def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: in
         )
         conn.commit()
         conn.close()
-
 
 def reschedule_funnel_for_all(context: CallbackContext, test_mode=True):
     """Обновляем очередь автоворонки для всех согласившихся пользователей"""
