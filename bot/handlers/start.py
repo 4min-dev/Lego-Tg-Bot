@@ -18,10 +18,6 @@ async def start(update: Update, context: CallbackContext) -> None:
     user = update.effective_user
     chat_id = update.effective_chat.id
 
-    if user.id not in ADMIN_IDS:
-        await context.bot.send_message(chat_id=chat_id, text="🚫 У вас нет доступа к этой команде.")
-        return
-
     source = 'qr'
     if update.message.text.startswith('/start '):
         payload = update.message.text.split(' ', 1)[1]

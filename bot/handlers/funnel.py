@@ -77,35 +77,40 @@ def start_funnel(context: CallbackContext, user_id: int, chat_id: int, test_mode
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    c.execute("SELECT order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC")
+    c.execute("SELECT id, order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC")
     messages = c.fetchall()
 
     c.execute("SELECT funnel_id FROM user_funnel_history WHERE user_id=? AND status IN ('pending', 'sent')", (user_id,))
     existing_ids = {row[0] for row in c.fetchall()}
 
-    for order_num, delay_days, text in messages:
-        if order_num in existing_ids:
+    earliest_send_time = None
+
+    for funnel_id, order_num, delay_days, text in messages:
+        if funnel_id in existing_ids:
             logger.info(f"Пропущено сообщение #{order_num} для user_id {user_id}: уже в истории")
             continue
 
-        delay = delay_days if test_mode else delay_days * 24 * 60 * 60
+        delay = delay_days * 24 * 60 * 60 
         run_date = now + datetime.timedelta(seconds=delay)
 
-        c.execute("UPDATE users SET next_send=? WHERE user_id=?", (run_date.isoformat(), user_id))
+        if earliest_send_time is None or run_date < earliest_send_time:
+            earliest_send_time = run_date
 
         context.job_queue.run_once(
             send_funnel_message,
             when=delay,
-            data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': order_num}
+            data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': funnel_id}
         )
 
-        # Помечаем сообщение как запланированное
         c.execute(
             "INSERT OR IGNORE INTO user_funnel_history(user_id, funnel_id, scheduled_at, status) VALUES (?, ?, ?, 'pending')",
-            (user_id, order_num, now.isoformat())
+            (user_id, funnel_id, now.isoformat())
         )
 
-        logger.info(f"Запланировано сообщение #{order_num} для user_id {user_id} через {delay} {'секунд' if test_mode else 'дней'}")
+        logger.info(f"Запланировано сообщение #{order_num} для user_id {user_id} через {delay_days} дней")
+
+    if earliest_send_time:
+        c.execute("UPDATE users SET next_send=? WHERE user_id=?", (earliest_send_time.isoformat(), user_id))
 
     conn.commit()
     conn.close()
@@ -140,6 +145,19 @@ async def send_funnel_message(context: CallbackContext):
                         "VALUES (?, ?, ?, ?, ?)",
                         (user_id, funnel_id, datetime.datetime.now().isoformat(), None, 'sent')
                     )
+                    
+                c.execute(
+                    "SELECT scheduled_at FROM user_funnel_history WHERE user_id=? AND status='pending' ORDER BY scheduled_at ASC LIMIT 1",
+                    (user_id,)
+                )
+                next_scheduled = c.fetchone()
+                if next_scheduled:
+                    c.execute(
+                        "UPDATE users SET next_send=? WHERE user_id=?",
+                        (next_scheduled[0], user_id)
+                    )
+                else:
+                    c.execute("UPDATE users SET next_send=NULL WHERE user_id=?", (user_id,))
                 conn.commit()
                 return True
             except Exception as e:
@@ -173,18 +191,23 @@ async def schedule_new_funnel_messages(context: CallbackContext, user_id: int, c
 
         messages = []
         async with db.execute(
-            "SELECT order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC"
+            "SELECT id, order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC"
         ) as cursor:
             async for row in cursor:
                 messages.append(row)
 
     now = datetime.datetime.now()
+    earliest_send_time = None 
 
-    for order_num, delay_days, text in messages:
-        if order_num in existing_ids:
+    for funnel_id, order_num, delay_days, text in messages:
+        if funnel_id in existing_ids:
             continue
 
-        delay_seconds = delay_days if test_mode else delay_days * 24 * 60 * 60
+        delay_seconds = delay_days * 24 * 60 * 60 
+        send_time = now + datetime.timedelta(seconds=delay_seconds)
+
+        if earliest_send_time is None or send_time < earliest_send_time:
+            earliest_send_time = send_time
 
         async with aiosqlite.connect(DB_FILE) as db:
             await db.execute(
@@ -192,21 +215,28 @@ async def schedule_new_funnel_messages(context: CallbackContext, user_id: int, c
                 INSERT OR IGNORE INTO user_funnel_history(user_id, funnel_id, scheduled_at, status)
                 VALUES (?, ?, ?, 'pending')
                 """,
-                (user_id, order_num, now.isoformat())
+                (user_id, funnel_id, now.isoformat())
             )
             await db.commit()
 
         context.job_queue.run_once(
             send_funnel_message,
             when=delay_seconds,
-            data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': order_num}
+            data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': funnel_id}
         )
 
-        send_time = now + datetime.timedelta(seconds=delay_seconds)
         logger.info(
-            f"Запланировано новое сообщение #{order_num} для user_id {user_id} "
-            f"через {delay_seconds} {'секунд' if test_mode else 'дней'} (отправка в {send_time})"
+            f"Запланировано новое сообщение #{order_num} (ID: {funnel_id}) для user_id {user_id} "
+            f"через {delay_days} дней (отправка в {send_time})"
         )
+
+    if earliest_send_time:
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute(
+                "UPDATE users SET next_send=? WHERE user_id=?",
+                (earliest_send_time.isoformat(), user_id)
+            )
+            await db.commit()
 
 
 
@@ -221,22 +251,23 @@ def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: in
     )
     existing_ids = {row[0] for row in c.fetchall()}
     
-    # Берём все сообщения из воронки
     c.execute("SELECT id, order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC")
     messages = c.fetchall()
 
     now = datetime.datetime.now()
-    scheduled_any = False  # флаг — добавили ли что-то новое
+    scheduled_any = False
+    earliest_send_time = None
 
-    for funnel_id, order_num, delay_sec, text in messages:
+    for funnel_id, order_num, delay_days, text in messages:
         if funnel_id in existing_ids:
-            continue  # пропускаем уже существующие
+            continue
 
-        # время задержки
-        delay = delay_sec if test_mode else delay_sec * 24 * 60 * 60
+        delay = delay_days * 24 * 60 * 60 
         send_time = now + datetime.timedelta(seconds=delay)
 
-        # создаём задачу для JobQueue
+        if earliest_send_time is None or send_time < earliest_send_time:
+            earliest_send_time = send_time
+
         async def send_async(context: CallbackContext):
             await send_funnel_message(context)
 
@@ -246,7 +277,6 @@ def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: in
             data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': funnel_id}
         )
 
-        # записываем в историю
         c.execute(
             """
             INSERT OR IGNORE INTO user_funnel_history(user_id, funnel_id, scheduled_at, status)
@@ -255,15 +285,15 @@ def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: in
             (user_id, funnel_id, now.isoformat())
         )
 
-        # обновляем поле next_send
-        c.execute(
-            "UPDATE users SET next_send=? WHERE user_id=?",
-            (send_time.isoformat(), user_id)
-        )
-
         scheduled_any = True
         logger.info(
-            f"Запланировано новое сообщение #{order_num} (ID: {funnel_id}) для user_id {user_id} через {delay} сек (в {send_time})"
+            f"Запланировано новое сообщение #{order_num} (ID: {funnel_id}) для user_id {user_id} через {delay_days} дней (в {send_time})"
+        )
+
+    if earliest_send_time:
+        c.execute(
+            "UPDATE users SET next_send=? WHERE user_id=?",
+            (earliest_send_time.isoformat(), user_id)
         )
 
     conn.commit()

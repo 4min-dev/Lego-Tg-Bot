@@ -38,7 +38,7 @@ async def funnel_preview(update: Update, context: CallbackContext):
 
     async with aiosqlite.connect(DB_FILE) as conn:
         async with conn.execute(
-            "SELECT order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC"
+            "SELECT id, order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC"
         ) as cursor:
             messages = await cursor.fetchall()
 
@@ -48,11 +48,11 @@ async def funnel_preview(update: Update, context: CallbackContext):
     await update.message.reply_text("📬 Начинаю предпросмотр сообщений автоворонки...")
     logger.info(f"Администратор {update.effective_user.id} запросил предпросмотр автоворонки")
 
-    for order_num, delay_days, text in messages:
+    for funnel_id, order_num, delay_days, text in messages:
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"<b>Сообщение #{order_num}</b> (задержка: {delay_days} сек.)\n{text}",
+                text=f"<b>Сообщение #{order_num}</b> (задержка: {delay_days} дней)\n{text}",
                 parse_mode='HTML'
             )
             logger.info(f"Отправлено сообщение #{order_num} администратору {update.effective_user.id}")
@@ -106,7 +106,7 @@ async def funnel_list(update: Update, context: CallbackContext):
 
     text = "📬 <b>Список сообщений автоворонки:</b>\n\n"
     for r in rows:
-        text += f"<b>#{r[1]}</b> (через {r[2]} сек.)\n{r[3][:200]}{'...' if len(r[3]) > 200 else ''}\n\n"
+        text += f"<b>#{r[1]}</b> (через {r[2]} дней)\n{r[3][:200]}{'...' if len(r[3]) > 200 else ''}\n\n"
     await update.message.reply_html(text)
 
 
@@ -117,14 +117,14 @@ async def funnel_add(update: Update, context: CallbackContext):
 
     if len(context.args) < 1:
         return await update.message.reply_text(
-            "Использование: /funnel_add <секунды задержки> <текст сообщения>"
+            "Использование: /funnel_add <дни задержки> <текст сообщения>"
         )
 
     try:
-        delay_seconds = int(context.args[0])
+        delay_days = int(context.args[0])
         text = update.message.text_html[len(f"/funnel_add {context.args[0]} "):]
     except ValueError:
-        return await update.message.reply_text("Ошибка: задержка должна быть числом.")
+        return await update.message.reply_text("Ошибка: задержка должна быть числом (дни).")
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -135,7 +135,7 @@ async def funnel_add(update: Update, context: CallbackContext):
 
     c.execute(
         "INSERT INTO funnel_messages (order_num, delay_days, text) VALUES (?, ?, ?)",
-        (order_num, delay_seconds, text),
+        (order_num, delay_days, text),
     )
     new_id = c.lastrowid 
     conn.commit()
@@ -145,10 +145,10 @@ async def funnel_add(update: Update, context: CallbackContext):
     conn.close()
 
     for (user_id,) in users:
-        schedule_funnel_for_user(context, user_id, user_id, test_mode=True)
+        schedule_funnel_for_user(context, user_id, user_id, test_mode=False)
 
     await update.message.reply_text(
-        f"✅ Сообщение #{order_num} (ID: {new_id}) добавлено и запланировано для всех подписанных."
+        f"✅ Сообщение #{order_num} (ID: {new_id}) добавлено и запланировано для всех подписанных (задержка: {delay_days} дней)."
     )
 
 async def funnel_edit(update: Update, context: CallbackContext):
