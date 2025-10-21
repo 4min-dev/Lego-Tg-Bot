@@ -210,24 +210,33 @@ async def schedule_new_funnel_messages(context: CallbackContext, user_id: int, c
 
 
 def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: int, test_mode=True):
+    """Ставим только новые сообщения автоворонки в очередь для одного пользователя"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    c.execute("SELECT funnel_id FROM user_funnel_history WHERE user_id=? AND status IN ('pending', 'sent')", (user_id,))
+    # Получаем уже запланированные или отправленные сообщения
+    c.execute(
+        "SELECT funnel_id FROM user_funnel_history WHERE user_id=? AND status IN ('pending', 'sent')",
+        (user_id,)
+    )
     existing_ids = {row[0] for row in c.fetchall()}
     
+    # Берём все сообщения из воронки
     c.execute("SELECT order_num, delay_days, text FROM funnel_messages ORDER BY order_num ASC")
     messages = c.fetchall()
-    conn.close()
 
     now = datetime.datetime.now()
+    scheduled_any = False  # флаг — добавили ли что-то новое
+
     for order_num, delay_sec, text in messages:
         if order_num in existing_ids:
-            continue
-        
-        delay = delay_sec if test_mode else delay_sec * 24 * 60 * 60
+            continue  # пропускаем уже существующие
 
-        # Обёртка
+        # время задержки
+        delay = delay_sec if test_mode else delay_sec * 24 * 60 * 60
+        send_time = now + datetime.timedelta(seconds=delay)
+
+        # создаём задачу для JobQueue
         async def send_async(context: CallbackContext):
             await send_funnel_message(context)
 
@@ -236,17 +245,32 @@ def schedule_funnel_for_user(context: CallbackContext, user_id: int, chat_id: in
             when=delay,
             data={'chat_id': chat_id, 'user_id': user_id, 'text': text, 'funnel_id': order_num}
         )
-        
-        logger.info(f"Запланировано сообщение #{order_num} для user_id {user_id} через {delay} секунд")
-        
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
+
+        # записываем в историю
         c.execute(
-            "INSERT OR IGNORE INTO user_funnel_history(user_id, funnel_id, scheduled_at, status) VALUES (?, ?, ?, 'pending')",
+            """
+            INSERT OR IGNORE INTO user_funnel_history(user_id, funnel_id, scheduled_at, status)
+            VALUES (?, ?, ?, 'pending')
+            """,
             (user_id, order_num, now.isoformat())
         )
-        conn.commit()
-        conn.close()
+
+        # обновляем поле next_send
+        c.execute(
+            "UPDATE users SET next_send=? WHERE user_id=?",
+            (send_time.isoformat(), user_id)
+        )
+
+        scheduled_any = True
+        logger.info(
+            f"Запланировано новое сообщение #{order_num} для user_id {user_id} через {delay} сек (в {send_time})"
+        )
+
+    conn.commit()
+    conn.close()
+
+    if not scheduled_any:
+        logger.info(f"Для user_id {user_id} нет новых сообщений для планирования.")
 
 def reschedule_funnel_for_all(context: CallbackContext, test_mode=True):
     """Обновляем очередь автоворонки для всех согласившихся пользователей"""
