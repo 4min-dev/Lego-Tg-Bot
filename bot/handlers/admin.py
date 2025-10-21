@@ -137,6 +137,7 @@ async def funnel_add(update: Update, context: CallbackContext):
         "INSERT INTO funnel_messages (order_num, delay_days, text) VALUES (?, ?, ?)",
         (order_num, delay_seconds, text),
     )
+    new_id = c.lastrowid 
     conn.commit()
 
     c.execute("SELECT user_id FROM users WHERE consent_status='yes'")
@@ -144,13 +145,11 @@ async def funnel_add(update: Update, context: CallbackContext):
     conn.close()
 
     for (user_id,) in users:
-        chat_id = user_id 
-        schedule_funnel_for_user(context, user_id, chat_id, test_mode=True)
+        schedule_funnel_for_user(context, user_id, user_id, test_mode=True)
 
     await update.message.reply_text(
-        f"✅ Сообщение #{order_num} добавлено и запланировано для всех подписанных."
+        f"✅ Сообщение #{order_num} (ID: {new_id}) добавлено и запланировано для всех подписанных."
     )
-
 
 async def funnel_edit(update: Update, context: CallbackContext):
     """Редактировать существующее сообщение"""
@@ -172,7 +171,7 @@ async def funnel_edit(update: Update, context: CallbackContext):
     await update.message.reply_text(f"✏️ Сообщение #{order_num} обновлено.")
 
 async def funnel_delete(update: Update, context: CallbackContext):
-    """Удалить сообщение из воронки"""
+    """Удалить сообщение из воронки и связанные записи из истории"""
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("Доступ запрещён.")
     if not context.args:
@@ -184,10 +183,23 @@ async def funnel_delete(update: Update, context: CallbackContext):
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
+    c.execute("SELECT id FROM funnel_messages WHERE order_num=?", (order_num,))
+    result = c.fetchone()
+    if not result:
+        conn.close()
+        return await update.message.reply_text(f"Сообщение #{order_num} не найдено.")
+
+    funnel_id = result[0]
+
+
+    c.execute("DELETE FROM user_funnel_history WHERE funnel_id=?", (funnel_id,))
+
     c.execute("DELETE FROM funnel_messages WHERE order_num=?", (order_num,))
     conn.commit()
     conn.close()
-    await update.message.reply_text(f"🗑 Сообщение #{order_num} удалено.")
+
+    await update.message.reply_text(f"🗑 Сообщение #{order_num} удалено, связанные записи очищены.")
 
 def register(application):
     application.add_handler(CommandHandler("export", export))
