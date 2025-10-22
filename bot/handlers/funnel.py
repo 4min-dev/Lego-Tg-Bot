@@ -58,19 +58,37 @@ def initialize_funnel_messages():
     logger.info("Добавлены дефолтные сообщения в автоворонку.")
     conn.close()
 
-async def send_reminder(context: CallbackContext, chat_id: int, user_id: int):
+async def send_reminder(context: CallbackContext, chat_id: int = None, user_id: int = None):
+    # Если параметры переданы через context.job.data (для job_queue)
+    if chat_id is None or user_id is None:
+        data = context.job.data
+        chat_id = data['chat_id']
+        user_id = data['user_id']
+    
+    logger.info(f"Вызвана функция send_reminder для user_id {user_id}, chat_id {chat_id}")
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT consent_status FROM users WHERE user_id=?", (user_id,))
-    status = c.fetchone()
-    if status and status[0] == 'pending':
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Да, хочу быть в курсе!", callback_data='consent_yes')],
-            [InlineKeyboardButton("❌ Пока нет", callback_data='consent_no')]
-        ])
-        await context.bot.send_message(chat_id=chat_id, text=texts.REMINDER_TEXT, reply_markup=keyboard)
-    conn.close()
+    try:
+        c.execute("SELECT consent_status FROM users WHERE user_id=?", (user_id,))
+        status = c.fetchone()
+        logger.info(f"Статус согласия для user_id {user_id}: {status[0] if status else 'не найден'}")
+        if status and status[0] == 'pending':
+            from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Да, хочу быть в курсе!", callback_data='consent_yes')],
+                [InlineKeyboardButton("❌ Пока нет", callback_data='consent_no')]
+            ])
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=texts.REMINDER_TEXT, reply_markup=keyboard)
+                logger.info(f"Напоминание успешно отправлено для user_id {user_id}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке напоминания для user_id {user_id}: {e}")
+        else:
+            logger.info(f"Напоминание не отправлено для user_id {user_id}: consent_status не 'pending' (текущий статус: {status[0] if status else 'не найден'})")
+    except Exception as e:
+        logger.error(f"Ошибка при доступе к базе данных для user_id {user_id}: {e}")
+    finally:
+        conn.close()
 
 def start_funnel(context: CallbackContext, user_id: int, chat_id: int, test_mode=True):
     now = datetime.datetime.now()

@@ -18,6 +18,8 @@ async def start(update: Update, context: CallbackContext) -> None:
     user = update.effective_user
     chat_id = update.effective_chat.id
 
+    logger.info(f"Обработка команды /start для user_id {user.id}, chat_id {chat_id}")
+
     source = 'qr'
     if update.message.text.startswith('/start '):
         payload = update.message.text.split(' ', 1)[1]
@@ -29,10 +31,13 @@ async def start(update: Update, context: CallbackContext) -> None:
     if not c.fetchone():
         start_date = datetime.datetime.now().isoformat()
         c.execute(
-            'INSERT INTO users (user_id, username, first_name, start_date, source) VALUES (?, ?, ?, ?, ?)',
-            (user.id, user.username, user.first_name, start_date, source)
+            'INSERT INTO users (user_id, username, first_name, start_date, source, consent_status) VALUES (?, ?, ?, ?, ?, ?)',
+            (user.id, user.username, user.first_name, start_date, source, 'pending')
         )
         conn.commit()
+        c.execute('SELECT consent_status FROM users WHERE user_id = ?', (user.id,))
+        consent_status = c.fetchone()[0]
+        logger.info(f"Создан новый пользователь user_id {user.id} с consent_status='{consent_status}'")
     conn.close()
 
     await context.bot.send_message(chat_id=chat_id, text=texts.WELCOME_TEXT)
@@ -54,15 +59,14 @@ async def start(update: Update, context: CallbackContext) -> None:
     ])
     await context.bot.send_message(chat_id=chat_id, text=texts.CONSENT_TEXT, reply_markup=keyboard)
 
-    scheduler = get_scheduler(context)
-    scheduler.add_job(
+    logger.info(f"Планирование напоминания для user_id {user.id} через 5 секунд")
+    context.job_queue.run_once(
         send_reminder,
-        'date',
-        run_date=datetime.datetime.now() + datetime.timedelta(hours=3),
-        args=(context, chat_id, user.id),
+        when=5,
+        data={'chat_id': chat_id, 'user_id': user.id},
         name=f"reminder_{user.id}"
     )
-    logger.info(f"Добавлена задача напоминания для user_id {user.id}")
+    logger.info(f"Добавлена задача напоминания для user_id {user.id} через 5 секунд")
 
 def register(application):
     application.add_handler(CommandHandler("start", start))
