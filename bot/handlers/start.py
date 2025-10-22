@@ -59,14 +59,14 @@ async def start(update: Update, context: CallbackContext) -> None:
     ])
     await context.bot.send_message(chat_id=chat_id, text=texts.CONSENT_TEXT, reply_markup=keyboard)
 
-    logger.info(f"Планирование напоминания для user_id {user.id} через 5 секунд")
+    logger.info(f"Планирование напоминания для user_id {user.id} через 3 часа")
     context.job_queue.run_once(
         send_reminder,
-        when=5,
+        when=10800,
         data={'chat_id': chat_id, 'user_id': user.id},
         name=f"reminder_{user.id}"
     )
-    logger.info(f"Добавлена задача напоминания для user_id {user.id} через 5 секунд")
+    logger.info(f"Добавлена задача напоминания для user_id {user.id} через 3 часа")
 
 def register(application):
     application.add_handler(CommandHandler("start", start))
